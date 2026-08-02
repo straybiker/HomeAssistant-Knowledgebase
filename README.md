@@ -35,20 +35,22 @@ Complete guide for migrating from HTTP-based pool control to native Modbus TCP i
 
 Deploy, verify, and manage your Home Assistant configuration from the command line.
 
-**Features:**
-- Deploy config files to HA via SSH/SCP
-- Verify YAML syntax before deployment
-- Reload specific HA domains (automations, scripts, templates, etc.)
-- Restart Home Assistant with confirmation
-- Automatic backup on deploy with rollback on failure
+**Key Features:**
+- Deploy config files to HA via SSH/SCP with automatic backups
+- Verify YAML syntax before deployment (with automatic rollback on failure)
+- Reload specific HA domains (automations, scripts, templates, etc.) without restart
+- Restart Home Assistant safely with verification checks
+- Complete audit trail and timestamped backups
 
-**Usage:**
+**Quick Usage:**
 ```powershell
-.\ha_control.ps1 -Deploy -Verify -Restart
-.\ha_control.ps1 -Pull
-.\ha_control.ps1 -Diff
-.\ha_control.ps1 -Reload -Target Automations
+.\ha_control.ps1 -Deploy -Verify -Restart   # Safe full deployment
+.\ha_control.ps1 -Pull                      # Sync config from HA
+.\ha_control.ps1 -Diff                      # Preview changes
+.\ha_control.ps1 -Reload -Target Automations # Fast reload
 ```
+
+**📖 See also:** [ha_control.ps1 Detailed Reference](guides/HA_CONTROL_DETAILED.md) for credentials setup, -Verify/rollback behavior, failure scenarios, and advanced configuration.
 
 ### [ha_yaml.py](scripts/ha_yaml.py)
 **YAML formatting and diffing utility**
