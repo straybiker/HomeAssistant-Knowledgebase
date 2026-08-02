@@ -49,7 +49,7 @@ cd C:\Users\stray\OneDrive\Projects\HomeAssistant\Tools
 ### Usage
 
 ```powershell
-.\ha_control.ps1 [-Deploy] [-Pull] [-Diff] [-Verify] [-Reload] [-Restart] [-File <path>] [-Target <domain>]
+.\ha_control.ps1 [-Deploy] [-Pull] [-File <path>] [-Diff] [-Verify] [-Reload] [-Target <domain>] [-Restart]  
 ```
 
 ### Flags
