@@ -57,7 +57,7 @@ Deploy, verify, and manage your Home Assistant configuration from the command li
 
 Provides canonical YAML formatting and smart diffs that ignore whitespace changes.
 
-### [Scripts Manual](guides/SCRIPTS_MANUAL.md)
+### [Scripts Manual](scripts/MANUAL.md)
 **Complete guide for ha_control.ps1 and ha_yaml.py**
 
 Comprehensive documentation for Home Assistant deployment automation tools.
@@ -73,19 +73,17 @@ Comprehensive documentation for Home Assistant deployment automation tools.
 ## 🏠 Related Home Assistant Projects
 
 ### Pool Management
-- [homeassistant-poolstation](https://github.com/<YOUR_USERNAME>/homeassistant-poolstation) — Pool management custom component
-- [homeassistant-vistapool-modbus](https://github.com/<YOUR_USERNAME>/homeassistant-vistapool-modbus) — Vista pool Modbus integration
-- [PyPoolstation](https://github.com/<YOUR_USERNAME>/PyPoolstation) — Python library for Poolstation
+- [homeassistant-poolstation](https://github.com/straybiker/homeassistant-poolstation) — Pool management custom component
+- [PyPoolstation](https://github.com/straybiker/PyPoolstation) — Python library for Poolstation
 
 ### Smart Home Automation
-- [EV_Loadbalancer](https://github.com/<YOUR_USERNAME>/EV_Loadbalancer) — Smart EV charging load management and balancing
+- [EV_Loadbalancer](https://github.com/straybiker/EV_Loadbalancer) — Smart EV charging load management and balancing
 
 ### Tools & Libraries
-- [IdegisModbus](https://github.com/<YOUR_USERNAME>/IdegisModbus) — Modbus utilities for Idegis devices
-- [alfen_modbus](https://github.com/<YOUR_USERNAME>/alfen_modbus) — Modbus integration for Alfen EV chargers
-- [HA_AI_Analyzer](https://github.com/<YOUR_USERNAME>/HA_AI_Analyzer) — AI-powered Home Assistant log analysis
+- [IdegisModbus](https://github.com/straybiker/IdegisModbus) — Modbus utilities for Idegis devices
+- [alfen_modbus](https://github.com/straybiker/alfen_modbus) — Modbus integration for Alfen EV chargers
+- [HA_AI_Analyzer](https://github.com/straybiker/HA_AI_Analyzer) — AI-powered Home Assistant log analysis
 
-> **Note:** Replace `username` with your GitHub username in the links above
 
 ---
 
