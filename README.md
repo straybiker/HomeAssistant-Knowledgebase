@@ -71,17 +71,17 @@ Comprehensive documentation for Home Assistant deployment automation tools.
 ## 🏠 Related Home Assistant Projects
 
 ### Pool Management
-- [homeassistant-poolstation](https://github.com/username/homeassistant-poolstation) — Pool management custom component
-- [homeassistant-vistapool-modbus](https://github.com/username/homeassistant-vistapool-modbus) — Vista pool Modbus integration
-- [PyPoolstation](https://github.com/username/PyPoolstation) — Python library for Poolstation
+- [homeassistant-poolstation](https://github.com/<YOUR_USERNAME>/homeassistant-poolstation) — Pool management custom component
+- [homeassistant-vistapool-modbus](https://github.com/<YOUR_USERNAME>/homeassistant-vistapool-modbus) — Vista pool Modbus integration
+- [PyPoolstation](https://github.com/<YOUR_USERNAME>/PyPoolstation) — Python library for Poolstation
 
 ### Smart Home Automation
-- [EV_Loadbalancer](https://github.com/username/EV_Loadbalancer) — Smart EV charging load management and balancing
+- [EV_Loadbalancer](https://github.com/<YOUR_USERNAME>/EV_Loadbalancer) — Smart EV charging load management and balancing
 
 ### Tools & Libraries
-- [IdegisModbus](https://github.com/username/IdegisModbus) — Modbus utilities for Idegis devices
-- [alfen_modbus](https://github.com/username/alfen_modbus) — Modbus integration for Alfen EV chargers
-- [HA_AI_Analyzer](https://github.com/username/HA_AI_Analyzer) — AI-powered Home Assistant log analysis
+- [IdegisModbus](https://github.com/<YOUR_USERNAME>/IdegisModbus) — Modbus utilities for Idegis devices
+- [alfen_modbus](https://github.com/<YOUR_USERNAME>/alfen_modbus) — Modbus integration for Alfen EV chargers
+- [HA_AI_Analyzer](https://github.com/<YOUR_USERNAME>/HA_AI_Analyzer) — AI-powered Home Assistant log analysis
 
 > **Note:** Replace `username` with your GitHub username in the links above
 
