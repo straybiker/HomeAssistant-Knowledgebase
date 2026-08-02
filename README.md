@@ -95,3 +95,15 @@ cd HomeAssistant/Tools
 ## 📄 License
 
 MIT License — see [LICENSE](LICENSE)
+
+### [Scripts Manual](guides/SCRIPTS_MANUAL.md)
+**Complete guide for ha_control.ps1 and ha_yaml.py**
+
+Comprehensive documentation for Home Assistant deployment automation tools.
+
+- ha_control.ps1 setup and usage
+- ha_yaml.py formatting and diffing
+- Common workflows and examples
+- Troubleshooting and best practices
+- Integration with Git and CI/CD
+
