@@ -15,6 +15,17 @@ A temporary bridge for integrating Ecowitt / Fine Offset WH52 3-in-1 soil sensor
 - Troubleshooting
 - Upgrade path to native rtl_433 support (protocol 353)
 
+### [Poolstation Modbus Migration](guides/POOLSTATION_MODBUS_MIGRATION.md)
+**HTTP to Modbus TCP migration for Idegis pool controller**
+
+Complete guide for migrating from HTTP-based pool control to native Modbus TCP integration. Includes entity renaming, YAML updates, and rollback procedures.
+
+- 53 Modbus entities mapped
+- Automated and manual migration steps
+- Entity renaming from `idegis_domotic_*` to `poolcontroller_*`
+- Comprehensive troubleshooting
+- Rollback instructions if needed
+
 ---
 
 ## 🛠️ Scripts
@@ -48,9 +59,20 @@ Provides canonical YAML formatting and smart diffs that ignore whitespace change
 
 ## 🏠 Related Home Assistant Projects
 
+### Pool Management
 - [homeassistant-poolstation](https://github.com/username/homeassistant-poolstation) — Pool management custom component
 - [homeassistant-vistapool-modbus](https://github.com/username/homeassistant-vistapool-modbus) — Vista pool Modbus integration
 - [PyPoolstation](https://github.com/username/PyPoolstation) — Python library for Poolstation
+
+### Smart Home Automation
+- [EV_Loadbalancer](https://github.com/username/EV_Loadbalancer) — Smart EV charging load management and balancing
+
+### Tools & Libraries
+- [IdegisModbus](https://github.com/username/IdegisModbus) — Modbus utilities for Idegis devices
+- [alfen_modbus](https://github.com/username/alfen_modbus) — Modbus integration for Alfen EV chargers
+- [HA_AI_Analyzer](https://github.com/username/HA_AI_Analyzer) — AI-powered Home Assistant log analysis
+
+> **Note:** Replace `username` with your GitHub username in the links above
 
 ---
 
