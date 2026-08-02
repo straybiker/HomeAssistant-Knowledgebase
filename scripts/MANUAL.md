@@ -78,8 +78,8 @@ cd C:\Users\stray\OneDrive\Projects\HomeAssistant\Tools
 1. Creates backup of current config on HA
 2. Uploads your local files
 3. Verifies YAML syntax
-4. Restarts Home Assistant
-5. On failure, automatically rolls back from backup
+4. On failure, automatically rolls back from backup
+5. Restarts Home Assistant
 
 #### 2. Check Before Deploying (Dry Run)
 
@@ -137,7 +137,7 @@ cd C:\Users\stray\OneDrive\Projects\HomeAssistant\Tools
 # Edit scripts.yaml locally, then:
 .\ha_control.ps1 -Deploy -File scripts.yaml -Verify
 
-# Verify without deploying
+# Compare without deploying
 .\ha_control.ps1 -Diff -File scripts.yaml
 ```
 
@@ -166,7 +166,7 @@ Create `.env` file with:
 ```powershell
 HA_URL=http://ha.local:8123           # URL to HA
 HA_TOKEN=eyJ...                       # Long-lived access token
-HA_SSH_USER=root                      # SSH user (usually root)
+HA_SSH_USER=<username>                # SSH user (usually root)
 HA_SSH_HOST=ha.local                  # SSH hostname or IP
 HA_SSH_PORT=22                        # SSH port
 ```
@@ -551,5 +551,4 @@ $script:backupCreated = $false  # Skip rollback
 
 ---
 
-**Last updated:** 2026-08-02  
 **Tested with:** HA 2026.7.3, PowerShell 7.4
