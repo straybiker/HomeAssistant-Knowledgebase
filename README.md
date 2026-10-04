@@ -59,8 +59,7 @@ Keeps comments, key order and `!secret` tags. Reads YAML 1.1 like Home Assistant
 - [PyPoolstation](https://github.com/straybiker/PyPoolstation) — Python library for Poolstation
 
 ### Smart Home Automation
-- [HA EV Charge Control](https://github.com/straybiker/HA-EV-Charge-Control) — Home Assistant integration for EV smart charging: solar, EMS, price and the capacity tariff (beta)
-- [HA-load-balancer](https://github.com/straybiker/HA-load-balancer) — The YAML package it replaces (final release v4.4.0)
+- [HA EV Charge Control](https://github.com/straybiker/HA-EV-Charge-Control) — Home Assistant integration for EV smart charging: solar, EMS, price and the capacity tariff
 
 ### Tools & Libraries
 - [IdegisModbus](https://github.com/straybiker/IdegisModbus) — Modbus utilities for Idegis devices
