@@ -1,554 +1,268 @@
-# Home Assistant Scripts Manual
+# ha_control.ps1 and ha_yaml.py manual
 
-Complete documentation for `ha_control.ps1` and `ha_yaml.py` deployment automation tools.
+`ha_control.ps1` moves Home Assistant YAML configuration between a local repository and the live `/config` folder over SSH. It also verifies, reloads and restarts Home Assistant through the REST API.
 
----
+`ha_yaml.py` gives all YAML files one canonical format and compares files by meaning instead of by text. `ha_control.ps1` calls it automatically.
 
-## Quick Start
+## Contents
 
-### Prerequisites
+- [Requirements](#requirements)
+- [Installation](#installation)
+- [Commands](#commands)
+- [Rollback](#rollback)
+- [YAML formatting](#yaml-formatting)
+- [Dry run](#dry-run)
+- [Exit codes](#exit-codes)
+- [ha_yaml.py on its own](#ha_yamlpy-on-its-own)
+- [Troubleshooting](#troubleshooting)
 
-1. **PowerShell 5.0+** (built-in on Windows 10+)
-2. **SSH access** to your Home Assistant instance
-3. **`.env` file** with credentials (see Setup section)
-4. **Python 3.7+** (for ha_yaml.py; optional if not using -Verify flag)
+## Requirements
 
-### Setup
+On your PC:
 
-Create `.env` file in the same directory as `ha_control.ps1`:
+| Requirement | Why |
+| --- | --- |
+| PowerShell 7 (`pwsh`) on Windows | Runs the script |
+| OpenSSH client (`ssh`, `scp`) | File transfer and remote commands |
+| `tar.exe` (built into Windows 10 and later) | Builds the deployment bundle |
+| Git (optional) | Enables the pull guard against overwriting uncommitted changes |
+| Python 3 with `ruamel.yaml` and PyYAML (optional) | Canonical formatting and the semantic diff. Without it, the script says so once and falls back to a text comparison |
 
 ```powershell
-# .env (example)
-HA_URL=http://ha.local:8123
-HA_TOKEN=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
-HA_SSH_USER=root
-HA_SSH_HOST=ha.local
+pip install ruamel.yaml pyyaml
+```
+
+On Home Assistant:
+
+- The **Advanced SSH & Web Terminal** add-on, with SSH access to `/config`.
+- A **long-lived access token** (your profile → Security → Long-lived access tokens).
+
+## Installation
+
+### 1. Folder layout
+
+The repository is a mirror of `/config`. The scripts go into a `Tools` folder in the repository root:
+
+```text
+my-ha-config/              <- mirror of /config
+├── .env                   <- credentials, never committed
+├── configuration.yaml
+├── automations.yaml
+├── packages/
+└── Tools/
+    ├── ha_control.ps1
+    ├── ha_yaml.py
+    └── .deployignore
+```
+
+The script reads `..\.env` and finds `ha_yaml.py` and `.deployignore` next to itself. Keep these three files together.
+
+### 2. Credentials: `.env`
+
+Create `.env` in the repository root:
+
+```ini
+HA_URL=http://homeassistant.local:8123
+HA_TOKEN=<your long-lived access token>
+HA_SSH_USER=<ssh user of the add-on>
+HA_SSH_HOST=homeassistant.local
 HA_SSH_PORT=22
 ```
 
-Get your HA token: **Settings → Developer Tools → Long-Lived Access Tokens → Create Token**
+All five values are required. The script stops with a clear message when one is missing.
 
-### First Run
+> [!WARNING]
+> `.env` holds your token. Add it to `.gitignore` and never commit it. If a token leaks, revoke it in Home Assistant and create a new one.
 
-```powershell
-cd C:\Users\stray\OneDrive\Projects\HomeAssistant\Tools
+### 3. SSH authentication
 
-# Test connection (dry run, no changes)
-.\ha_control.ps1 -Diff
+The script calls `ssh` and `scp` directly, so it uses your normal OpenSSH setup. Use an SSH key (in `~/.ssh` or loaded in `ssh-agent`) and add the public key to the add-on configuration. Otherwise every transfer asks for a password.
 
-# Deploy a test file
-.\ha_control.ps1 -Pull -File configuration.yaml
-```
+The script requests the `aes256-gcm@openssh.com` cipher and the legacy SCP protocol (`scp -O`). The Advanced SSH & Web Terminal add-on supports both.
 
----
+### 4. Deployment exclusions: `.deployignore`
 
-## ha_control.ps1 — Deployment Automation
+`-Deploy` bundles the whole repository except the entries in `Tools\.deployignore`. Start from the sample in this folder and add your own repository-only folders.
 
-**Purpose:** Deploy Home Assistant config changes safely with verification and rollback.
+> [!IMPORTANT]
+> Keep `.env`, `.git` and `.storage` in `.deployignore`. Without the file, a full deploy uploads your credentials and Git history into `/config`.
 
-### Usage
+Each line becomes one `tar --exclude=<pattern>` argument. These are tar globs, not gitignore patterns:
 
-```powershell
-.\ha_control.ps1 [-Deploy] [-Pull] [-File <path>] [-Diff] [-Verify] [-Reload] [-Target <domain>] [-Restart]  
-```
+| Pattern | Excludes |
+| --- | --- |
+| `docs` | every folder named `docs`, at any depth |
+| `./docs` | only the `docs` folder in the root (GNU tar; bsdtar treats it like the bare form) |
+| `*.md` | every Markdown file, at any depth |
 
-### Flags
+## Commands
 
-| Flag | Purpose | Example |
-|------|---------|---------|
-| `-Deploy` | Upload config to HA | `.\ha_control.ps1 -Deploy` |
-| `-Pull` | Download config from HA | `.\ha_control.ps1 -Pull` |
-| `-Diff` | Show what changed (dry run) | `.\ha_control.ps1 -Diff` |
-| `-Verify` | Check YAML syntax | `.\ha_control.ps1 -Deploy -Verify` |
-| `-Reload` | Reload domains (no restart) | `.\ha_control.ps1 -Reload -Target Automations` |
-| `-Restart` | Restart Home Assistant | `.\ha_control.ps1 -Deploy -Verify -Restart` |
-| `-File <path>` | Single file operation | `.\ha_control.ps1 -Pull -File packages/wh52.yaml` |
-| `-Target <domain>` | Reload specific domain | `-Reload -Target Scripts` |
+Run the script from the repository root (`.\Tools\ha_control.ps1`) or from the `Tools` folder (`.\ha_control.ps1`).
 
-### Common Workflows
+### Diff: preview changes
 
-#### 1. Edit → Verify → Deploy → Restart
+Downloads the remote files to a temporary folder outside the repository and compares them with your local copies. It changes nothing.
 
 ```powershell
-# Make changes to your YAML files, then:
-.\ha_control.ps1 -Deploy -Verify -Restart
+.\Tools\ha_control.ps1 -Diff
+.\Tools\ha_control.ps1 -Diff -File automations.yaml
 ```
 
-**What happens:**
-1. Creates backup of current config on HA
-2. Uploads your local files
-3. Verifies YAML syntax
-4. On failure, automatically rolls back from backup
-5. Restarts Home Assistant
+Scope: root `*.yaml`, `packages/` and `custom_templates/`. `-Deploy` writes more than this; `.deployignore` defines the full bundle.
 
-#### 2. Check Before Deploying (Dry Run)
+### Pull: sync down from Home Assistant
+
+The HA web UI saves automations, scripts and scenes on the server. Pull them before you deploy, or your local copy overwrites them.
 
 ```powershell
-# See what will change without touching anything
-.\ha_control.ps1 -Diff
+.\Tools\ha_control.ps1 -Pull
+.\Tools\ha_control.ps1 -Pull -File automations.yaml
 ```
 
-**Output example:**
-```
---- DIFF FOR automations.yaml (- local, + HA) ---
-@@ -125,3 +125,8 @@
-   - alias: Old Automation
-+  - alias: New Automation
-+    trigger:
-+      platform: time
-+      at: '15:00:00'
-```
+Pull refuses to run when a file in its scope has uncommitted changes. Commit or stash first, or pass `-Force` to overwrite them.
 
-#### 3. Reload Without Restart
+### Deploy
+
+Full deploy: bundles the configuration (with subfolders), copies it to Home Assistant and unpacks it into `/config`.
 
 ```powershell
-# Reload only automations (faster than full restart)
-.\ha_control.ps1 -Reload -Target Automations
-
-# Reload everything (same as -Reload with no -Target)
-.\ha_control.ps1 -Reload
+.\Tools\ha_control.ps1 -Deploy -Verify
 ```
 
-**Available reload targets:**
-- `All` — Everything (default)
-- `Automations` — Automations only
-- `Scripts` — Scripts only
-- `Templates` — Template entities
-- `Themes` — UI themes
-- `Rest` — REST commands
-- `Core` — Core configuration
-
-#### 4. Pull Latest Config from HA
+Single file:
 
 ```powershell
-# Download all config files
-.\ha_control.ps1 -Pull
-
-# Download single file
-.\ha_control.ps1 -Pull -File automations.yaml
-
-# Download from subfolder
-.\ha_control.ps1 -Pull -File packages/wh52.yaml
+.\Tools\ha_control.ps1 -Deploy -File packages\pool_control.yaml -Verify
 ```
 
-#### 5. Simple File Edit & Deploy
+The upload is checked by sha256 against the server copy. A path outside the repository root is rejected.
+
+> [!IMPORTANT]
+> Always chain `-Verify` onto `-Deploy`. Without it, a deploy that uploads correctly but breaks the configuration counts as clean, and the backup is deleted.
+
+### Verify
+
+Asks Home Assistant to check the configuration on the server.
 
 ```powershell
-# Edit scripts.yaml locally, then:
-.\ha_control.ps1 -Deploy -File scripts.yaml -Verify
-
-# Compare without deploying
-.\ha_control.ps1 -Diff -File scripts.yaml
+.\Tools\ha_control.ps1 -Verify
 ```
 
-### Advanced Features
+### Reload
 
-#### Automatic Rollback on Verify Failure
+Applies changes without a restart. The default target is `All`.
 
 ```powershell
-# If verification fails, config is automatically restored
-.\ha_control.ps1 -Deploy -Verify -Restart
-# If verify fails: stops, rolls back, exits with error code 1
+.\Tools\ha_control.ps1 -Reload
+.\Tools\ha_control.ps1 -Reload -Target Automations
 ```
 
-#### Backup Management
+| Target | Reloads |
+| --- | --- |
+| `All` | every YAML domain (`reload_all`), themes, custom Jinja templates |
+| `Core` | core configuration |
+| `Automations` | automations |
+| `Scripts` | scripts |
+| `TemplateEntities` | template entities (`template.reload`) |
+| `Themes` | frontend themes |
+| `Rest` | REST commands |
+| `Templates` | custom Jinja templates in `custom_templates/` |
+
+`All` briefly unloads every YAML domain. An automation that runs at that moment can fail, for example with "script not found". Prefer the smallest target that covers your change.
+
+Some YAML integrations have no reload service, for example `utility_meter` and the `integration` sensor platform. A change to those needs a restart.
+
+### Restart
 
 ```powershell
-# Backups are created in: C:\...\HomeAssistant\backups\migration_*/
-# Named: migration_YYYYMMDD_HHMMSS_<operation>/
-# Contains: Original scripts.yaml, automations.yaml, configuration.yaml
+.\Tools\ha_control.ps1 -Restart
+.\Tools\ha_control.ps1 -Restart -RestartTimeoutSeconds 300
 ```
 
-#### Environment Variables
+The script waits until the API answers again, so a chained command runs against a live instance. It exits non-zero when Home Assistant stays down past the timeout (default 180 s, range 10–3600 s).
 
-Create `.env` file with:
+### Chain commands
 
 ```powershell
-HA_URL=http://ha.local:8123           # URL to HA
-HA_TOKEN=eyJ...                       # Long-lived access token
-HA_SSH_USER=<username>                # SSH user (usually root)
-HA_SSH_HOST=ha.local                  # SSH hostname or IP
-HA_SSH_PORT=22                        # SSH port
+.\Tools\ha_control.ps1 -Pull
+.\Tools\ha_control.ps1 -Deploy -File automations.yaml -Verify -Reload -Target Automations
 ```
 
-### Troubleshooting
+The order is fixed: Pull, Diff, Deploy, Verify, Reload, Restart.
 
-#### "Error: .env file not found"
-**Fix:** Create `.env` in same directory as script with correct credentials
+### All parameters
 
-#### "SSH connection refused"
-```powershell
-# Check SSH is enabled on HA:
-# Settings → System → Server Control → Advanced → SSH Server
+| Parameter | Effect |
+| --- | --- |
+| `-Diff` | Compare local and remote files |
+| `-Pull` | Download remote files |
+| `-Deploy` | Upload files, with a server-side backup |
+| `-File <path>` | Limit `-Diff`, `-Pull` or `-Deploy` to one file |
+| `-Verify` | Check the configuration on the server; roll back a deploy if it is invalid |
+| `-Reload` | Reload without restart |
+| `-Target <name>` | Reload target (see the table above) |
+| `-Restart` | Restart Home Assistant and wait until it answers |
+| `-RestartTimeoutSeconds <n>` | Restart wait limit (default 180) |
+| `-Force` | Let `-Pull` overwrite files with uncommitted changes |
+| `-NoFormat` | Skip the canonical reformat of local files |
+| `-WhatIf` / `-Confirm` | Dry run / confirm each remote write |
 
-# Test connection manually:
-ssh -p 22 root@ha.local
-```
+## Rollback
 
-#### "YAML validation failed"
-```powershell
-# Use -Diff to see exactly what's wrong:
-.\ha_control.ps1 -Diff
+`-Deploy` takes a backup on the server before it writes:
 
-# The error will show line numbers and the problem
-```
+- single file: `<file>.ha_bak` next to the target;
+- full deploy: `/config/.ha_control_deploy_backup.tar`, holding exactly the top-level paths the bundle overwrites.
 
-#### "Rollback failed"
-If automatic rollback fails:
-```powershell
-# Restore manually from backup
-Copy-Item -Path "backups\migration_*\*" -Destination "." -Force
-.\ha_control.ps1 -Reload
-```
+The backup is restored when the deployment stops part way, and when `-Verify` reports an invalid configuration. It is deleted after a clean run, so it never outlives the command. If the restore itself fails, the script prints the path of the backup left on the server and exits non-zero.
 
----
+## YAML formatting
 
-## ha_yaml.py — YAML Formatting & Diffing
+`-Diff`, `-Pull` and `-Deploy` first rewrite local YAML into one canonical format with `ha_yaml.py`. This stops files from changing back and forth between the repository, the Studio Code Server add-on and the HA web UI editors.
 
-**Purpose:** Canonical YAML formatting and intelligent diffs that ignore whitespace.
+- Comments, key order, `!secret` tags and block scalars are kept (ruamel round-trip).
+- The formatter reads YAML 1.1, like Home Assistant. Values such as `on`, `off`, `yes` and `no` keep their meaning.
+- Every result is checked with PyYAML, the loader Home Assistant uses. A file whose meaning would change is never written. ruamel and PyYAML disagree on plain `y` and `n`, for example.
+- `-Diff` compares by meaning, so pure formatting differences show as identical.
 
-### Installation
+Pass `-NoFormat` to leave local files untouched.
 
-```bash
-# Required: Python 3.7+
-# Install dependency:
-pip install ruamel.yaml
-
-# Or if using conda:
-conda install -c conda-forge ruamel.yaml
-```
-
-### Usage
-
-```bash
-python3 ha_yaml.py <command> [files]
-```
-
-### Commands
-
-#### Format Files (Canonical Style)
-
-```bash
-# Format a single file
-python3 ha_yaml.py format automations.yaml
-
-# Format multiple files
-python3 ha_yaml.py format automations.yaml scripts.yaml configuration.yaml
-
-# Format entire directory
-python3 ha_yaml.py format *.yaml
-```
-
-**Output:**
-```
-formatted: automations.yaml (320 lines)
-formatted: scripts.yaml (145 lines)
-skip: configuration.yaml (unchanged)
-```
-
-#### Compare Files (Smart Diff)
-
-```bash
-# Compare local vs remote file
-python3 ha_yaml.py diff local_automations.yaml remote_automations.yaml automations.yaml
-
-# Result ignores whitespace differences:
-# - Only shows semantic changes
-# - Ignores indentation changes
-# - Ignores comment differences
-```
-
-**Output example:**
-```
---- DIFF FOR automations.yaml ---
-@@ line 125 @@
-- old_entity_id: sensor.temperature
-+ new_entity_id: sensor.room_temperature
-```
-
-### Integration with ha_control.ps1
-
-The `ha_control.ps1` script **automatically uses** `ha_yaml.py`:
-
-- **`-Deploy`** — Formats files before upload (canonical style)
-- **`-Diff`** — Uses smart diffing to show only meaningful changes
-- **`-Verify`** — Validates YAML syntax before deployment
-
-You don't need to run it manually unless you want to format files standalone.
-
-### Why Canonical Formatting?
-
-```yaml
-# Before (inconsistent)
-automation:
-  - alias:    WH52 reshape
-    mode:queued
-    trigger:
-      platform: mqtt
-        topic: home/rtl_devices/unknown/rows_0_data
-
-# After (canonical)
-automation:
-  - alias: WH52 reshape
-    mode: queued
-    trigger:
-      - platform: mqtt
-        topic: home/rtl_devices/unknown/rows_0_data
-```
-
-Benefits:
-- Consistent across all files
-- Easier code reviews (no formatting noise)
-- Catches YAML syntax errors early
-- Git diffs are cleaner
-
----
-
-## Real-World Workflows
-
-### Workflow 1: Safe Automation Update
-
-You want to add a new automation safely:
+## Dry run
 
 ```powershell
-# 1. Edit automations.yaml locally
-#    (add your new automation)
-
-# 2. Check what changed
-.\ha_control.ps1 -Diff -File automations.yaml
-
-# 3. Deploy and verify (auto-rollback on failure)
-.\ha_control.ps1 -Deploy -File automations.yaml -Verify
-
-# 4. If verification passed, reload (no restart needed)
-.\ha_control.ps1 -Reload -Target Automations
-
-# Done! Check logbook for errors
+.\Tools\ha_control.ps1 -Deploy -WhatIf
 ```
 
-### Workflow 2: Bulk Config Update
+Builds the bundle and reports its size, entry count and top-level members. Lists every remote write it would perform, without doing any of them. `-Confirm` asks before each write.
 
-Multiple files changed (e.g., adding WH52 package):
+## Exit codes
 
-```powershell
-# 1. Made changes to:
-#    - packages/wh52.yaml
-#    - configuration.yaml (added recorder exclusion)
-#    - automations.yaml (added new automations)
+`0` on success. `1` on any failure: a failed upload, a failed verification, a failed reload or restart, a restart timeout or a failed rollback. Check `$LASTEXITCODE` when you script around it.
 
-# 2. Check all changes at once
-.\ha_control.ps1 -Diff
+## ha_yaml.py on its own
 
-# 3. Deploy everything with full safety checks
-.\ha_control.ps1 -Deploy -Verify -Restart
-
-# Automatic rollback occurs if any step fails
+```text
+python ha_yaml.py format <file> [<file> ...]   # rewrite in place if changed
+python ha_yaml.py diff   <local> <remote> [name]
 ```
 
-### Workflow 3: Sync Config from HA Back to Local
+| Command | Exit code | Meaning |
+| --- | --- | --- |
+| `format` | `0` | Done. Each file is reported as formatted or unchanged |
+| `format` | `1` | A file could not be parsed, or formatting would change its meaning. The file is left untouched |
+| `diff` | `0` | Same meaning |
+| `diff` | `1` | Different. A unified diff of the canonical form is printed |
+| `diff` | `2` | Could not parse, or the canonical form hides a difference that Home Assistant sees. Fall back to a text diff |
 
-HA admin made changes in UI, sync back:
+## Troubleshooting
 
-```powershell
-# 1. Pull latest from HA
-.\ha_control.ps1 -Pull
-
-# 2. Review changes in git
-git diff
-
-# 3. Commit locally
-git add .
-git commit -m "Sync config changes from HA"
-
-# 4. Push to GitHub
-git push
-```
-
-### Workflow 4: Quick Test Before Production
-
-Test a change on staging before prod:
-
-```powershell
-# 1. Deploy to staging with verification
-.\ha_control.ps1 -Deploy -Verify -Restart
-
-# 2. Test manually in HA (15-30 min)
-
-# 3. If good, commit and tag for production
-git tag production-ready-2026-08-02
-
-# 4. Deploy to production
-.\ha_control.ps1 -Deploy -Verify -Restart
-```
-
----
-
-## Environment Setup
-
-### Windows Setup
-
-```powershell
-# 1. Set execution policy (one-time)
-Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
-
-# 2. Create .env file in Tools directory
-# Copy template from above
-
-# 3. Test connection
-.\ha_control.ps1 -Diff
-```
-
-### SSH Key Authentication (Optional)
-
-For passwordless SSH:
-
-```bash
-# Generate key on your PC (one-time)
-ssh-keygen -t ed25519 -f ~/.ssh/ha_rsa
-
-# Copy to HA (requires password once)
-ssh-copy-id -i ~/.ssh/ha_rsa.pub root@ha.local
-
-# Now update .env to use key
-HA_SSH_USER=root
-HA_SSH_HOST=ha.local
-HA_SSH_PORT=22
-# ha_control uses SSH key if available (~/.ssh/id_rsa or ~/.ssh/id_ed25519)
-```
-
-### Backup Strategy
-
-```powershell
-# Backups auto-create in:
-# HomeAssistant/backups/migration_YYYYMMDD_HHMMSS_deploy/
-
-# Keep last 10 backups, clean old ones:
-Remove-Item "backups" -Filter "migration_*" -Recurse | 
-  Sort-Object -Property CreationTime -Descending | 
-  Select-Object -Skip 10 | 
-  Remove-Item -Recurse -Force
-```
-
----
-
-## Integration with Git
-
-### Pre-Commit Hook
-
-Automatically format YAML before committing:
-
-```bash
-# Create .git/hooks/pre-commit
-#!/bin/bash
-cd "$(git rev-parse --git-dir)/.."
-python3 ha_yaml.py format *.yaml packages/*.yaml
-git add *.yaml packages/*.yaml
-```
-
-### CI/CD Pipeline
-
-```yaml
-# Example: GitLab CI (.gitlab-ci.yml)
-deploy_ha:
-  script:
-    - ./ha_control.ps1 -Deploy -Verify -Restart
-  only:
-    - main
-```
-
----
-
-## Tips & Best Practices
-
-### 1. Always Diff Before Deploy
-```powershell
-.\ha_control.ps1 -Diff      # See exactly what changes
-.\ha_control.ps1 -Deploy    # Deploy with confidence
-```
-
-### 2. Use -Reload for Fast Updates
-```powershell
-# Restart takes 30-60 seconds
-.\ha_control.ps1 -Restart
-
-# Reload takes 2-5 seconds (same effect for automations/scripts)
-.\ha_control.ps1 -Reload -Target Automations
-```
-
-### 3. Keep Backups
-```powershell
-# Backups auto-create, but keep them safe
-Copy-Item -Path "backups" -Destination "backups_archive_$(Get-Date -Format yyyyMMdd)" -Recurse
-```
-
-### 4. Test in Automations Tab
-After deployment, check **Settings → Automations** for any error indicators (red icons).
-
-### 5. Monitor Logs After Restart
-```
-Settings → System → Logs
-Search: "error", "warning", "pool", "wh52", etc.
-```
-
----
-
-## Troubleshooting Matrix
-
-| Problem | Cause | Solution |
-|---------|-------|----------|
-| "Connection refused" | SSH port wrong | Check HA SSH settings |
-| "Authentication failed" | Wrong credentials | Verify token in .env |
-| "YAML validation failed" | Syntax error in file | Use -Diff to locate |
-| "Timeout waiting for..." | Slow network | Increase timeout or check connection |
-| "Entity not found" | Entity ID mistyped | Check entity IDs in HA first |
-| "Rollback failed" | Backup corrupted | Restore manually from `.backups/` |
-
----
-
-## Advanced
-
-### Custom Timeout
-
-```powershell
-# Default is 30 seconds, increase for slow networks:
-# Edit ha_control.ps1, line ~35:
-$timeout = 60  # seconds
-```
-
-### Disable Automatic Rollback
-
-```powershell
-# For CI/CD (if you want to keep bad config):
-# Edit ha_control.ps1, line ~80:
-$script:backupCreated = $false  # Skip rollback
-```
-
-### Log All Changes
-
-```powershell
-# Redirect output to file
-.\ha_control.ps1 -Deploy -Verify -Restart *> deploy.log
-```
-
----
-
-## Support
-
-**For ha_control.ps1 issues:**
-- Check `.env` credentials
-- Verify SSH access: `ssh -p 22 root@ha.local`
-- Enable SSH debugging: `ssh -vv ...`
-
-**For ha_yaml.py issues:**
-- Verify Python 3.7+: `python --version`
-- Check ruamel.yaml installed: `pip show ruamel.yaml`
-- Test on single file first
-
-**For Home Assistant issues:**
-- Check system logs: **Settings → System → Logs**
-- Restart HA: **Settings → System → Restart**
-- Check entity availability: **Developer Tools → States**
-
----
-
-**Tested with:** HA 2026.7.3, PowerShell 7.4
+| Message or symptom | Cause | Fix |
+| --- | --- | --- |
+| `.env file not found at …` | `.env` is not in the repository root, one level above `Tools` | Move `.env` to the root |
+| `.env has no value for: …` | A required key is empty or missing | Fill in all five keys |
+| `Pull would overwrite these files` | Uncommitted local changes inside the pull scope | Commit or stash, or use `-Force` |
+| Formatting skipped, text comparison used | Python, `ruamel.yaml` or PyYAML not found | `pip install ruamel.yaml pyyaml` |
+| Password prompt on every transfer | No SSH key set up | Add your public key to the add-on configuration |
+| `Home Assistant did not answer within … s` | The restart takes longer than the timeout | Raise `-RestartTimeoutSeconds`, then check the HA log |
+| Deploy rolled back after `-Verify` | The configuration on the server is invalid | Run `-Verify` again for the error, fix it locally, deploy again |
+| An automation fails during a reload | `-Reload` (All) unloaded the domain it uses | Reload only the target you changed |

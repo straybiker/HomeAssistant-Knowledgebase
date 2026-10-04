@@ -1,0 +1,27 @@
+# Deployment exclusions for ha_control.ps1 -Deploy
+# Files and folders listed here are NOT pushed to the Home Assistant server.
+#
+# Each line becomes one `tar --exclude=<pattern>` argument, so these are tar
+# globs, not gitignore patterns:
+#   docs     excludes ANY directory named docs, at any depth
+#   ./docs   excludes only the one in the repository root (GNU tar; bsdtar
+#            ignores the ./ prefix and treats it like the bare form)
+#   *.md     matches by name at any depth
+
+# Never deploy these: .env holds the HA token and SSH settings.
+.git
+.gitignore
+.env
+.deployignore
+.storage
+config_deploy.tar
+
+# Editor and tooling state
+.vscode
+
+# Folders that exist only in the repository, not in /config
+./Tools
+
+# Documentation and Python helpers live in the repo, not on the server
+*.md
+*.py

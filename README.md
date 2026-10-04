@@ -31,42 +31,24 @@ Complete guide for migrating from HTTP-based pool control to native Modbus TCP i
 ## 🛠️ Scripts
 
 ### [ha_control.ps1](scripts/ha_control.ps1)
-**PowerShell automation for Home Assistant config deployment**
+**Deploy Home Assistant YAML configuration from a Git repository over SSH**
 
-Deploy, verify, and manage your Home Assistant configuration from the command line.
-
-**Key Features:**
-- Deploy config files to HA via SSH/SCP with automatic backups
-- Verify YAML syntax before deployment (with automatic rollback on failure)
-- Reload specific HA domains (automations, scripts, templates, etc.) without restart
-- Restart Home Assistant safely with verification checks
-- Complete audit trail and timestamped backups
-
-**Quick Usage:**
-```powershell
-.\ha_control.ps1 -Deploy -Verify -Restart   # Safe full deployment
-.\ha_control.ps1 -Pull                      # Sync config from HA
-.\ha_control.ps1 -Diff                      # Preview changes
-.\ha_control.ps1 -Reload -Target Automations # Fast reload
-```
-
-**📖 See also:** [ha_control.ps1 Detailed Reference](guides/HA_CONTROL_DETAILED.md) for credentials setup, -Verify/rollback behavior, failure scenarios, and advanced configuration.
+- Diff, pull and deploy between the repository and `/config`. A single-file upload is checked by sha256.
+- Server-side backup before every deploy. It is restored automatically when the deploy fails or `-Verify` reports an invalid configuration.
+- Pull refuses to overwrite uncommitted local changes.
+- Reload one domain (automations, scripts, template entities, …) or restart, and wait until Home Assistant answers again.
+- Dry run with `-WhatIf`. Exit code `1` on any failure.
 
 ### [ha_yaml.py](scripts/ha_yaml.py)
-**YAML formatting and diffing utility**
+**Canonical YAML formatting and diff by meaning**
 
-Provides canonical YAML formatting and smart diffs that ignore whitespace changes.
+Keeps comments, key order and `!secret` tags. Reads YAML 1.1 like Home Assistant, and never writes a file whose meaning would change. `ha_control.ps1` calls it automatically.
+
+### [.deployignore](scripts/.deployignore)
+**Sample deployment exclusions.** Keeps `.env`, `.git` and other repository-only files out of `/config`.
 
 ### [Scripts Manual](scripts/MANUAL.md)
-**Complete guide for ha_control.ps1 and ha_yaml.py**
-
-Comprehensive documentation for Home Assistant deployment automation tools.
-
-- ha_control.ps1 setup and usage
-- ha_yaml.py formatting and diffing
-- Common workflows and examples
-- Troubleshooting and best practices
-- Integration with Git and CI/CD
+**Setup, commands, rollback, formatting and troubleshooting for both scripts.**
 
 ---
 
@@ -77,7 +59,8 @@ Comprehensive documentation for Home Assistant deployment automation tools.
 - [PyPoolstation](https://github.com/straybiker/PyPoolstation) — Python library for Poolstation
 
 ### Smart Home Automation
-- [EV_Loadbalancer](https://github.com/straybiker/EV_Loadbalancer) — Smart EV charging load management and balancing
+- [HA EV Charge Control](https://github.com/straybiker/HA-EV-Charge-Control) — Home Assistant integration for EV smart charging: solar, EMS, price and the capacity tariff (beta)
+- [HA-load-balancer](https://github.com/straybiker/HA-load-balancer) — The YAML package it replaces (final release v4.4.0)
 
 ### Tools & Libraries
 - [IdegisModbus](https://github.com/straybiker/IdegisModbus) — Modbus utilities for Idegis devices
@@ -89,16 +72,13 @@ Comprehensive documentation for Home Assistant deployment automation tools.
 
 ## 📋 Quick Start
 
+Put the three files from `scripts/` into a `Tools` folder in your configuration repository, and create `.env` in the repository root. See the [Scripts Manual](scripts/MANUAL.md#installation).
+
 ```powershell
-# Deploy and verify:
-cd HomeAssistant/Tools
-.\ha_control.ps1 -Deploy -Verify -Restart
-
-# Check changes before deploying:
-.\ha_control.ps1 -Diff
-
-# Reload without restarting:
-.\ha_control.ps1 -Reload -Target Automations
+.\Tools\ha_control.ps1 -Diff                                        # preview, changes nothing
+.\Tools\ha_control.ps1 -Pull                                        # get UI-made changes first
+.\Tools\ha_control.ps1 -Deploy -File automations.yaml -Verify -Reload -Target Automations
+.\Tools\ha_control.ps1 -Deploy -Verify                              # full deploy, always with -Verify
 ```
 
 ---
