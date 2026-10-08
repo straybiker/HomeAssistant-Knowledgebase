@@ -176,10 +176,10 @@ Some YAML integrations have no reload service, for example `utility_meter` and t
 
 ```powershell
 .\Tools\ha_control.ps1 -Restart
-.\Tools\ha_control.ps1 -Restart -RestartTimeoutSeconds 300
+.\Tools\ha_control.ps1 -Restart -RestartTimeoutSeconds 600
 ```
 
-The script waits until the API answers again, so a chained command runs against a live instance. It exits non-zero when Home Assistant stays down past the timeout (default 180 s, range 10–3600 s).
+The script waits until Home Assistant has stopped and its core state is `RUNNING` again, so a chained command runs against a fully started instance. The API answers before startup finishes, so the script checks the core state rather than waiting for an answer. It exits non-zero when Home Assistant does not stop within 60 s, or does not finish starting within the timeout (default 300 s, range 10–3600 s).
 
 ### Chain commands
 
@@ -201,8 +201,8 @@ The order is fixed: Pull, Diff, Deploy, Verify, Reload, Restart.
 | `-Verify` | Check the configuration on the server; roll back a deploy if it is invalid |
 | `-Reload` | Reload without restart |
 | `-Target <name>` | Reload target (see the table above) |
-| `-Restart` | Restart Home Assistant and wait until it answers |
-| `-RestartTimeoutSeconds <n>` | Restart wait limit (default 180) |
+| `-Restart` | Restart Home Assistant and wait until startup has finished |
+| `-RestartTimeoutSeconds <n>` | Restart wait limit (default 300) |
 | `-Force` | Let `-Pull` overwrite files with uncommitted changes |
 | `-NoFormat` | Skip the canonical reformat of local files |
 | `-WhatIf` / `-Confirm` | Dry run / confirm each remote write |

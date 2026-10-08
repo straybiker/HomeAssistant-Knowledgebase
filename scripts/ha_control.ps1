@@ -45,7 +45,7 @@ param (
     # Skips the canonical YAML reformat of local files.
     [switch]$NoFormat,
     [ValidateRange(10, 3600)]
-    [int]$RestartTimeoutSeconds = 180
+    [int]$RestartTimeoutSeconds = 300
 )
 
 Set-StrictMode -Version Latest
@@ -114,6 +114,17 @@ function Get-ResponseValue {
     $property = $Response.PSObject.Properties[$Name]
     if ($null -eq $property) { return $null }
     return $property.Value
+}
+
+function Get-HaCoreState {
+    # /api/ answers while HA still loads integrations. The core state in
+    # /api/config is RUNNING only after startup has finished. $null = no answer.
+    try {
+        $config = Invoke-RestMethod -Uri "$($script:HaUrl)/api/config" -Method Get -Headers $script:Headers -TimeoutSec 5
+        return Get-ResponseValue -Response $config -Name 'state'
+    } catch {
+        return $null
+    }
 }
 
 function ConvertTo-PosixPath {
@@ -875,31 +886,56 @@ try {
                 $sent = $true
                 Write-Host 'Restart command sent.' -ForegroundColor Green
             } catch {
-                Write-Host "Failed to restart Home Assistant: $_" -ForegroundColor Red
-                $script:ExitCode = 1
+                # HA stops before it answers a restart call, so the connection drops
+                # without an HTTP response. Only an HTTP error (401, 500, ...) means
+                # HA refused. The wait loop below reports a restart that never happened.
+                $httpResponse = $_.Exception.PSObject.Properties['Response']
+                if ($httpResponse -and $httpResponse.Value) {
+                    Write-Host "Failed to restart Home Assistant: $_" -ForegroundColor Red
+                    $script:ExitCode = 1
+                } else {
+                    $sent = $true
+                    Write-Host 'Restart command sent (the connection closed while HA shut down).' -ForegroundColor Green
+                }
             }
 
             if ($sent) {
-                # Wait for the API to answer again, so a chained command sees the
-                # real outcome instead of "request accepted".
-                Write-Host "Waiting for Home Assistant to come back (timeout $RestartTimeoutSeconds s)..." -ForegroundColor Cyan
-                Start-Sleep -Seconds 5
-                $deadline = (Get-Date).AddSeconds($RestartTimeoutSeconds)
+                # Wait until startup has finished, so a chained command sees the real
+                # outcome instead of "request accepted". The old instance can still
+                # report RUNNING for a few seconds, so first wait for it to leave
+                # that state. The Supervisor log shows 47-111 s from stop to RUNNING.
+                Write-Host "Waiting for Home Assistant to restart (timeout $RestartTimeoutSeconds s)..." -ForegroundColor Cyan
+                $startedAt = Get-Date
+                $deadline = $startedAt.AddSeconds($RestartTimeoutSeconds)
+                $stopDeadline = $startedAt.AddSeconds([Math]::Min(60, $RestartTimeoutSeconds))
+                $wentDown = $false
                 $online = $false
                 while ((Get-Date) -lt $deadline) {
-                    Show-ActionProgress 'Waiting for Home Assistant to come back...' 70
-                    try {
-                        Invoke-RestMethod -Uri "$($script:HaUrl)/api/" -Method Get -Headers $script:Headers -TimeoutSec 5 | Out-Null
-                        $online = $true
-                        break
-                    } catch {
-                        Start-Sleep -Seconds 5
+                    Start-Sleep -Seconds 3
+                    $state = Get-HaCoreState
+                    if (-not $wentDown) {
+                        Show-ActionProgress 'Waiting for Home Assistant to stop...' 50
+                        if ($state -ne 'RUNNING') {
+                            $wentDown = $true
+                        } elseif ((Get-Date) -gt $stopDeadline) {
+                            break
+                        }
+                    } else {
+                        Show-ActionProgress 'Waiting for Home Assistant to start...' 70
+                        if ($state -eq 'RUNNING') {
+                            $online = $true
+                            break
+                        }
                     }
                 }
                 if ($online) {
-                    Write-Host 'Home Assistant is back online.' -ForegroundColor Green
+                    $seconds = [int]((Get-Date) - $startedAt).TotalSeconds
+                    Write-Host "Home Assistant is back online after $seconds s." -ForegroundColor Green
+                } elseif (-not $wentDown) {
+                    Write-Host 'Home Assistant did not stop, so the restart did not start.' -ForegroundColor Red
+                    $script:ExitCode = 1
                 } else {
-                    Write-Host "Home Assistant did not answer within $RestartTimeoutSeconds s." -ForegroundColor Red
+                    Write-Host "Home Assistant did not finish starting within $RestartTimeoutSeconds s." -ForegroundColor Red
                     $script:ExitCode = 1
                 }
             }
