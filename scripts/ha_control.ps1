@@ -28,6 +28,23 @@
 .EXAMPLE
     .\ha_control.ps1 -Deploy -WhatIf
     Builds the bundle and reports every remote write it would perform.
+
+.EXAMPLE
+    .\ha_control.ps1 -Remove packages/dehumidifier_card.yaml -Deploy -File packages/dehumidifier.yaml -Verify -Reload
+    Removes a file that was merged into another one. -Deploy never deletes
+    remote files, so without -Remove the old file stays and HA loads both.
+    The removed file is kept as .ha_bak until -Verify passes.
+
+.EXAMPLE
+    .\ha_control.ps1 -App ..\..\ha-ev-charge-cost\ev_charge_cost
+    Copies a local app (add-on) folder to /addons/<slug> on the server, reloads
+    the app store, then installs and starts the app, updates it when its version
+    went up, or rebuilds it when the version is the same.
+
+.EXAMPLE
+    .\ha_control.ps1 -Fetch '.storage/neonplan3d*'
+    Copies matching server files, read only, to a local folder outside the
+    repository. Use it for paths -Pull does not cover, such as .storage.
 #>
 [CmdletBinding(SupportsShouldProcess)]
 param (
@@ -35,11 +52,21 @@ param (
     [switch]$Pull,
     [switch]$Diff,
     [string]$File,
+    # Path relative to /config; '*' and '?' are allowed. Never writes to the server.
+    [string]$Fetch,
+    # Where -Fetch saves files. Default: %TEMP%\ha_control_fetch, outside the
+    # repository, because .storage files can hold tokens and personal data.
+    [string]$OutDir,
+    # Paths relative to /config (.yaml, .yml or .jinja) to delete on the server,
+    # for files already deleted from the repo. Needs -Verify; runs before -Deploy.
+    [string[]]$Remove,
     [switch]$Verify,
     [switch]$Reload,
     [ValidateSet('All', 'Core', 'Automations', 'Scripts', 'Themes', 'Rest', 'Templates', 'TemplateEntities')]
     [string]$Target,
     [switch]$Restart,
+    # Local app (add-on) folder with a config.yaml; installed or updated as local_<slug>.
+    [string]$App,
     # Lets -Pull overwrite local files that have uncommitted changes.
     [switch]$Force,
     # Skips the canonical YAML reformat of local files.
@@ -70,6 +97,8 @@ $script:VerifiedOk = $false
 $script:RemoteBackupTar = '/config/.ha_control_deploy_backup.tar'
 # Top-level paths the full-deploy bundle writes; a full rollback replaces them.
 $script:BundleTopLevel = @()
+# Files -Remove moved to <path>.ha_bak; restored unless -Verify passes.
+$script:RemovedFiles = @()
 
 $script:TarResolved = $false
 $script:TarPrefix = @()
@@ -80,12 +109,15 @@ $script:SourceDir = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 
 # Overall pipeline progress across flags.
 $script:ActionList = @()
+if ($Fetch) { $script:ActionList += 'Fetch' }
 if ($Pull) { $script:ActionList += 'Pull' }
 if ($Diff) { $script:ActionList += 'Diff' }
+if ($Remove) { $script:ActionList += 'Remove' }
 if ($Deploy) { $script:ActionList += 'Deploy' }
 if ($Verify) { $script:ActionList += 'Verify' }
 if ($Reload) { $script:ActionList += 'Reload' }
 if ($Restart) { $script:ActionList += 'Restart' }
+if ($App) { $script:ActionList += 'App' }
 $script:ActionIndex = 0
 
 # --------------------------------------------------------------------------
@@ -284,6 +316,40 @@ function Remove-RemoteBackup {
     } catch {
         # Cleanup is best effort; a stale backup file on the server is harmless.
     }
+}
+
+function Restore-RemovedFiles {
+    foreach ($relativePath in $script:RemovedFiles) {
+        $remoteTarget = ConvertTo-ShellQuoted ('/config/' + $relativePath)
+        $remoteBackup = ConvertTo-ShellQuoted ('/config/' + $relativePath + '.ha_bak')
+        $result = $null
+        try {
+            $result = Invoke-Ssh -NonFatal -RemoteCommand "mv -f $remoteBackup $remoteTarget" `
+                -Description "Restoring the removed file $relativePath..."
+        } catch {
+            Write-Host "Exception during the restore of ${relativePath}: $_" -ForegroundColor Red
+        }
+        if ($null -eq $result -or $result.ExitCode -ne 0) {
+            Write-Host "ROLLBACK FAILED. The backup is still on the server: /config/$relativePath.ha_bak" -ForegroundColor Red
+            $script:ExitCode = 1
+        }
+    }
+    $script:RemovedFiles = @()
+}
+
+function Clear-RemovedFiles {
+    # Runs only after -Verify passed: the .ha_bak copies are the last trace of
+    # the removed files on the server. Git still has them.
+    foreach ($relativePath in $script:RemovedFiles) {
+        $remoteBackup = ConvertTo-ShellQuoted ('/config/' + $relativePath + '.ha_bak')
+        try {
+            Invoke-Ssh -NonFatal -RemoteCommand "rm -f $remoteBackup" | Out-Null
+            Write-Host "Removed /config/$relativePath." -ForegroundColor Green
+        } catch {
+            # Best effort; HA does not load a .ha_bak file.
+        }
+    }
+    $script:RemovedFiles = @()
 }
 
 function Get-RemoteSha256 {
@@ -554,12 +620,56 @@ if ($Target -and -not $Reload) {
 if ($File -and -not ($Deploy -or $Pull -or $Diff)) {
     Write-Host 'Note: -File only applies to -Deploy, -Pull and -Diff; ignoring it.' -ForegroundColor Yellow
 }
+if ($OutDir -and -not $Fetch) {
+    Write-Host 'Note: -OutDir only applies to -Fetch; ignoring it.' -ForegroundColor Yellow
+}
+# Without -Verify nothing decides between keeping and restoring the removed
+# files, and a broken configuration would only show at the next restart.
+if ($Remove -and -not $Verify) {
+    Write-Host 'Error: -Remove needs -Verify.' -ForegroundColor Red
+    exit 1
+}
 
 # --------------------------------------------------------------------------
 # Actions
 # --------------------------------------------------------------------------
 try {
     Set-Location $script:SourceDir
+
+    if ($Fetch) {
+        Show-ActionProgress 'Fetching files from Home Assistant...' 10
+
+        # 'scp -O' hands the remote path to the server's shell, so anything beyond
+        # a plain path with wildcards could run a command there.
+        if ($Fetch -notmatch '^[A-Za-z0-9._\-/*?]+$') {
+            throw "-Fetch '$Fetch' contains characters other than letters, digits, '._-/*?'."
+        }
+        if ($Fetch.StartsWith('/') -or ($Fetch -split '/') -contains '..') {
+            throw "-Fetch '$Fetch' must be a path inside /config, relative to it."
+        }
+
+        $fetchDir = if ($OutDir) { $OutDir } else { Join-Path ([System.IO.Path]::GetTempPath()) 'ha_control_fetch' }
+        if (Test-Proceed -TargetDescription $fetchDir -Action "Save copies of /config/$Fetch") {
+            New-Item -ItemType Directory -Path $fetchDir -Force | Out-Null
+            $fetchDir = (Resolve-Path -LiteralPath $fetchDir).Path
+            $before = @{}
+            Get-ChildItem -LiteralPath $fetchDir -File | ForEach-Object { $before[$_.Name] = $_.LastWriteTimeUtc }
+
+            Show-ActionProgress "Downloading /config/$Fetch..." 50
+            Invoke-Scp -Paths @("$($script:RemoteHost):/config/$Fetch", $fetchDir) -Description "Fetching /config/$Fetch..." | Out-Null
+
+            # The folder is reused between runs, so report only what this run wrote.
+            # scp without -p stamps each copy with the current time, so a file
+            # fetched again always counts as written.
+            $fetched = @(Get-ChildItem -LiteralPath $fetchDir -File |
+                Where-Object { -not $before.ContainsKey($_.Name) -or $before[$_.Name] -ne $_.LastWriteTimeUtc })
+            if ($fetched.Count -eq 0) { Write-Host 'No file was written.' -ForegroundColor Yellow }
+            $fetched | ForEach-Object { Write-Host "  $($_.FullName) ($($_.Length) bytes)" -ForegroundColor Green }
+        }
+
+        Show-ActionProgress 'Fetch complete.' 100
+        $script:ActionIndex++
+    }
 
     if ($Pull) {
         Show-ActionProgress 'Pulling the configuration from Home Assistant...' 10
@@ -647,7 +757,7 @@ try {
                 if (Test-Path -LiteralPath $localFile -PathType Leaf) {
                     Invoke-YamlDiff -LocalFile $localFile -RemoteFile $_.FullName -DisplayName $relPath
                 } else {
-                    Write-Host "$relPath only exists on the server." -ForegroundColor Yellow
+                    Write-Host "$relPath only exists on the server. Delete it there with -Remove $relPath -Verify." -ForegroundColor Yellow
                 }
             }
 
@@ -666,6 +776,50 @@ try {
 
         Show-ActionProgress 'Diff complete.' 100
         Write-Host 'Diff complete (scope: root *.yaml, packages/, custom_templates/).' -ForegroundColor Green
+        $script:ActionIndex++
+    }
+
+    if ($Remove) {
+        Show-ActionProgress 'Removing files on the server...' 10
+        foreach ($item in $Remove) {
+            $relativePath = ($item -replace '\\', '/') -replace '^\./', ''
+
+            # The path ends up in a remote shell command; see -Fetch.
+            if ($relativePath -notmatch '^[A-Za-z0-9._\-/]+$') {
+                throw "-Remove '$item' contains characters other than letters, digits, '._-/'."
+            }
+            if ($relativePath.StartsWith('/') -or ($relativePath -split '/') -contains '..') {
+                throw "-Remove '$item' must be a path inside /config, relative to it."
+            }
+            # Only configuration files: never .storage, databases or the backup itself.
+            if ($relativePath -notmatch '\.(ya?ml|jinja)$' -or $relativePath -in @('configuration.yaml', 'secrets.yaml')) {
+                throw "-Remove '$item': only .yaml, .yml and .jinja files, and never configuration.yaml or secrets.yaml."
+            }
+            # A file still in the repo would come back with the next full deploy.
+            if (Test-Path -LiteralPath (Join-Path $script:SourceDir $relativePath)) {
+                throw "-Remove '$item' still exists locally. Delete it from the repo first."
+            }
+
+            if (Test-Proceed -TargetDescription "/config/$relativePath" -Action 'Remove (kept as .ha_bak until -Verify passes)') {
+                $quotedTarget = ConvertTo-ShellQuoted ('/config/' + $relativePath)
+                $quotedBackup = ConvertTo-ShellQuoted ('/config/' + $relativePath + '.ha_bak')
+                $move = Invoke-Ssh -NonFatal -Description "Removing $relativePath..." `
+                    -RemoteCommand "if [ -e $quotedBackup ]; then echo BACKUP_EXISTS; exit 3; fi; if [ -f $quotedTarget ]; then mv $quotedTarget $quotedBackup && echo MOVED; else echo MISSING; fi"
+                if ($move.Text -match 'BACKUP_EXISTS') {
+                    throw "A backup from an earlier failed run exists: /config/$relativePath.ha_bak. Restore or delete it, then run again."
+                }
+                if ($move.ExitCode -ne 0) {
+                    throw "Could not remove $relativePath on the server (exit $($move.ExitCode)): $($move.Text)"
+                }
+                if ($move.Text -match 'MOVED') {
+                    $script:RemovedFiles += $relativePath
+                    Write-Host "Moved /config/$relativePath to .ha_bak; it is deleted when the configuration verifies." -ForegroundColor Green
+                } else {
+                    Write-Host "/config/$relativePath is not on the server; nothing to remove." -ForegroundColor Yellow
+                }
+            }
+        }
+        Show-ActionProgress 'Remove complete.' 100
         $script:ActionIndex++
     }
 
@@ -830,6 +984,7 @@ try {
             # Roll back here, while the reason is known, rather than leaving it to
             # the exit handler.
             Restore-RemoteBackup
+            Restore-RemovedFiles
             throw 'Configuration verification failed.'
         }
 
@@ -837,6 +992,7 @@ try {
         Write-Host 'Configuration is VALID!' -ForegroundColor Green
         $script:VerifiedOk = $true
         Remove-RemoteBackup
+        Clear-RemovedFiles
         $script:ActionIndex++
     }
 
@@ -944,8 +1100,91 @@ try {
         $script:ActionIndex++
     }
 
-    if (-not ($Deploy -or $Pull -or $Diff -or $Verify -or $Reload -or $Restart)) {
+    if ($App) {
+        Show-ActionProgress 'Checking the app folder...' 5
+        # The script works from the repo root; a relative -App is meant from where you called it.
+        $appPath = if ([System.IO.Path]::IsPathRooted($App)) { $App } else { Join-Path $script:OriginalLocation.Path $App }
+        $appDir = (Resolve-Path -LiteralPath $appPath).Path
+        $manifest = Join-Path $appDir 'config.yaml'
+        if (-not (Test-Path -LiteralPath $manifest -PathType Leaf)) {
+            throw "-App '$App' has no config.yaml; point it at the app folder itself."
+        }
+        $manifestText = Get-Content -LiteralPath $manifest -Raw
+        if ($manifestText -notmatch '(?m)^slug:\s*"?([a-z0-9_]+)"?\s*$') {
+            throw "$manifest has no valid 'slug:' line."
+        }
+        $slug = $Matches[1]
+        $appVersion = if ($manifestText -match '(?m)^version:\s*"?([^"\s]+)"?') { $Matches[1] } else { '?' }
+        $appId = "local_$slug"
+        # A CRLF shebang makes the container fail to start with "not found".
+        foreach ($shellFile in @(Get-ChildItem -LiteralPath $appDir -Recurse -File -Filter '*.sh')) {
+            if ((Get-Content -LiteralPath $shellFile.FullName -Raw) -match "`r") {
+                throw "$($shellFile.FullName) has CRLF line endings; the container needs LF."
+            }
+        }
+
+        if (Test-Proceed -TargetDescription "/addons/$slug ($appId $appVersion)" -Action 'Upload the app and install, update or rebuild it') {
+            Show-ActionProgress "Packing $slug..." 15
+            $appTar = Join-Path (New-TempRoot) "$slug.tar"
+            $pack = Invoke-Native -Executable 'tar.exe' -Arguments (@(Get-TarArguments) + @(
+                    '-cf', $appTar, '--exclude', '__pycache__', '--exclude', '*.pyc', '--exclude', '.pytest_cache',
+                    '-C', $appDir, '.'))
+            if ($pack.ExitCode -ne 0) { throw "tar failed (exit $($pack.ExitCode)): $($pack.Text)" }
+
+            Show-ActionProgress "Uploading $slug..." 30
+            $remoteTar = "/tmp/ha_control_app_$slug.tar"
+            Invoke-Scp -Paths @((ConvertTo-PosixPath $appTar), "$($script:RemoteHost):$remoteTar") -Description "Uploading $slug $appVersion..." | Out-Null
+            Assert-UploadIntact -LocalPath $appTar -RemotePath $remoteTar -DisplayName "$slug.tar"
+
+            # Extract next to the target, then swap, so a failed extract leaves the old copy in place.
+            Show-ActionProgress "Placing /addons/$slug..." 45
+            Invoke-Ssh -Description "Placing /addons/$slug..." -RemoteCommand (
+                "set -e; mkdir -p /addons; rm -rf /addons/.$slug.new; mkdir /addons/.$slug.new; " +
+                "tar -xf $remoteTar -C /addons/.$slug.new; rm -rf /addons/.$slug.old; " +
+                "if [ -d /addons/$slug ]; then mv /addons/$slug /addons/.$slug.old; fi; " +
+                "mv /addons/.$slug.new /addons/$slug; rm -rf /addons/.$slug.old $remoteTar") | Out-Null
+
+            Show-ActionProgress 'Reloading the app store...' 55
+            Invoke-Ssh -Description 'Reloading the app store...' -RemoteCommand 'ha store reload' | Out-Null
+
+            $info = Invoke-Ssh -NonFatal -RemoteCommand "ha apps info $appId --raw-json"
+            $data = $null
+            try { $data = Get-ResponseValue -Response ($info.Text | ConvertFrom-Json) -Name 'data' } catch { $data = $null }
+            if ($null -eq $data) {
+                throw "The store does not list $appId after the reload. Check the app's config.yaml.`n$($info.Text)"
+            }
+            # The Supervisor's app info has no "installed" field: "version" is the installed
+            # version, and null while the app is not installed.
+            $installedVersion = Get-ResponseValue -Response $data -Name 'version'
+            if (-not $installedVersion) {
+                Show-ActionProgress "Installing $appId (the image builds on the host)..." 65
+                Invoke-Ssh -Description "Installing $appId $appVersion (building the image can take a few minutes)..." -RemoteCommand "ha apps install $appId" | Out-Null
+                Invoke-Ssh -Description "Starting $appId..." -RemoteCommand "ha apps start $appId" | Out-Null
+                Write-Host "$appId $appVersion installed and started. Set its options under Settings > Apps if it needs any." -ForegroundColor Green
+            } elseif (Get-ResponseValue -Response $data -Name 'update_available') {
+                Show-ActionProgress "Updating $appId..." 65
+                Invoke-Ssh -Description "Updating $appId from $installedVersion to $appVersion..." -RemoteCommand "ha apps update $appId" | Out-Null
+                Write-Host "$appId updated to $appVersion." -ForegroundColor Green
+            } else {
+                # Same version: rebuild so the new code ends up in the image.
+                Show-ActionProgress "Rebuilding $appId..." 65
+                Invoke-Ssh -Description "Rebuilding $appId $appVersion (same version, new code)..." -RemoteCommand "ha apps rebuild $appId" | Out-Null
+                Write-Host "$appId $appVersion rebuilt." -ForegroundColor Green
+            }
+
+            Show-ActionProgress 'Reading the app log...' 90
+            $log = Invoke-Ssh -NonFatal -RemoteCommand "ha apps logs $appId 2>&1 | tail -n 15"
+            if ($log.Text) { Write-Host "Last log lines of ${appId}:`n$($log.Text)" }
+        }
+        Show-ActionProgress 'App complete.' 100
+        $script:ActionIndex++
+    }
+
+    if (-not ($Fetch -or $Deploy -or $Pull -or $Diff -or $Remove -or $Verify -or $Reload -or $Restart -or $App)) {
         Write-Host 'Usage: .\ha_control.ps1 [-Deploy] [-Pull] [-Diff] [-File <path>] [-Verify] [-Reload]'
+        Write-Host '                        [-Remove <path>[,<path>...] -Verify]'
+        Write-Host '                        [-App <local app folder>]'
+        Write-Host '                        [-Fetch <path under /config>] [-OutDir <folder>]'
         Write-Host '                        [-Target <All|Core|Automations|Scripts|Themes|Rest|Templates|TemplateEntities>]'
         Write-Host '                        [-Restart] [-Force] [-NoFormat] [-RestartTimeoutSeconds <n>] [-WhatIf]'
         Write-Host ''
@@ -962,6 +1201,8 @@ try {
         $clean = $script:DeployCompleted -and ($script:VerifiedOk -or -not $Verify) -and $script:ExitCode -eq 0
         if ($clean) { Remove-RemoteBackup } else { Restore-RemoteBackup }
     }
+    # Still listed means -Verify never passed: the run aborted after the move.
+    if ($script:RemovedFiles.Count -gt 0) { Restore-RemovedFiles }
     if ($script:TempRoot -and (Test-Path -LiteralPath $script:TempRoot)) {
         Remove-Item -Recurse -Force -LiteralPath $script:TempRoot -ErrorAction SilentlyContinue -WhatIf:$false
     }

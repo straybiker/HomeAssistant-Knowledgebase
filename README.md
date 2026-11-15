@@ -34,10 +34,18 @@ Complete guide for migrating from HTTP-based pool control to native Modbus TCP i
 **Deploy Home Assistant YAML configuration from a Git repository over SSH**
 
 - Diff, pull and deploy between the repository and `/config`. A single-file upload is checked by sha256.
-- Server-side backup before every deploy. It is restored automatically when the deploy fails or `-Verify` reports an invalid configuration.
+- `-Remove` deletes retired files on the server, which `-Deploy` never does, so a merged package does not load twice.
+- Server-side backup before every deploy and remove. It is restored automatically when the run fails or `-Verify` reports an invalid configuration.
 - Pull refuses to overwrite uncommitted local changes.
-- Reload one domain (automations, scripts, template entities, …) or restart, and wait until Home Assistant answers again.
+- `-Fetch` copies other server files, such as `.storage`, read only to a folder outside the repository.
+- `-App` installs or updates a local app (add-on) from its folder.
+- Reload one domain (automations, scripts, template entities, …) or restart, and wait until startup has finished.
 - Dry run with `-WhatIf`. Exit code `1` on any failure.
+
+### [ha_snapshot.py](scripts/ha_snapshot.py)
+**Before/after check for a configuration move**
+
+Records all entities before a step and reports what the step broke: missing entities, `_2` duplicates, entities that turned unavailable, and new duplicate or invalid-config errors in the log. Read only.
 
 ### [ha_yaml.py](scripts/ha_yaml.py)
 **Canonical YAML formatting and diff by meaning**
@@ -48,7 +56,7 @@ Keeps comments, key order and `!secret` tags. Reads YAML 1.1 like Home Assistant
 **Sample deployment exclusions.** Keeps `.env`, `.git` and other repository-only files out of `/config`.
 
 ### [Scripts Manual](scripts/MANUAL.md)
-**Setup, commands, rollback, formatting and troubleshooting for both scripts.**
+**Setup, commands, rollback, formatting and troubleshooting for the scripts.**
 
 ---
 
@@ -71,13 +79,14 @@ Keeps comments, key order and `!secret` tags. Reads YAML 1.1 like Home Assistant
 
 ## 📋 Quick Start
 
-Put the three files from `scripts/` into a `Tools` folder in your configuration repository, and create `.env` in the repository root. See the [Scripts Manual](scripts/MANUAL.md#installation).
+Put the files from `scripts/` into a `Tools` folder in your configuration repository, and create `.env` in the repository root. See the [Scripts Manual](scripts/MANUAL.md#installation).
 
 ```powershell
 .\Tools\ha_control.ps1 -Diff                                        # preview, changes nothing
 .\Tools\ha_control.ps1 -Pull                                        # get UI-made changes first
 .\Tools\ha_control.ps1 -Deploy -File automations.yaml -Verify -Reload -Target Automations
 .\Tools\ha_control.ps1 -Deploy -Verify                              # full deploy, always with -Verify
+.\Tools\ha_control.ps1 -Remove packages\old.yaml -Verify            # delete a retired file on the server
 ```
 
 ---
